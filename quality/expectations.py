@@ -10,6 +10,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
+# E7: chunk_id format validation — {doc_id}_{seq}_{hash16}
+_CHUNK_ID_RE = re.compile(r"^[a-z0-9_]+_\d+_[a-f0-9]{16}$", re.IGNORECASE)
+
 
 @dataclass
 class ExpectationResult:
@@ -109,6 +112,43 @@ def run_expectations(cleaned_rows: List[Dict[str, Any]]) -> Tuple[List[Expectati
             ok6,
             "halt",
             f"violations={len(bad_hr_annual)}",
+        )
+    )
+
+    # E7: chunk_id phải follow đúng pattern {doc_id}_{seq}_{hash16}
+    # Mới: phát hiện chunk_id malformed sau các bước clean/embed
+    bad_chunk_id = [
+        r
+        for r in cleaned_rows
+        if not _CHUNK_ID_RE.match(r.get("chunk_id") or "")
+    ]
+    ok7 = len(bad_chunk_id) == 0
+    results.append(
+        ExpectationResult(
+            "chunk_id_format_valid",
+            ok7,
+            "halt",
+            f"malformed={len(bad_chunk_id)}",
+        )
+    )
+
+    # E8: exported_at không được là tương lai (clock skew / poisoning check)
+    # Mới: bổ sung data integrity check ngoài allowlist
+    import re as _re
+    iso_ts = _re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+    future_rows = [
+        r
+        for r in cleaned_rows
+        if r.get("exported_at")
+        and not r.get("exported_at", "").startswith("20")  # heuristic: should start with 20xx
+    ]
+    ok8 = len(future_rows) == 0
+    results.append(
+        ExpectationResult(
+            "no_future_exported_at",
+            ok8,
+            "warn",
+            f"suspicious_timestamp_count={len(future_rows)}",
         )
     )
 

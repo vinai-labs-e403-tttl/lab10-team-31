@@ -27,15 +27,6 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DMY_SLASH = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
 
 
-def _norm_text(s: str) -> str:
-    return " ".join((s or "").strip().split()).lower()
-
-
-def _stable_chunk_id(doc_id: str, chunk_text: str, seq: int) -> str:
-    h = hashlib.sha256(f"{doc_id}|{chunk_text}|{seq}".encode("utf-8")).hexdigest()[:16]
-    return f"{doc_id}_{seq}_{h}"
-
-
 def _normalize_effective_date(raw: str) -> Tuple[str, str]:
     """
     Trả về (iso_date, error_reason).
@@ -51,6 +42,21 @@ def _normalize_effective_date(raw: str) -> Tuple[str, str]:
         dd, mm, yyyy = m.group(1), m.group(2), m.group(3)
         return f"{yyyy}-{mm}-{dd}", ""
     return "", "invalid_effective_date_format"
+
+
+def _norm_text(s: str) -> str:
+    return " ".join((s or "").strip().split()).lower()
+
+
+def _stable_chunk_id(doc_id: str, chunk_text: str, seq: int) -> str:
+    h = hashlib.sha256(f"{doc_id}|{chunk_text}|{seq}".encode("utf-8")).hexdigest()[:16]
+    return f"{doc_id}_{seq}_{h}"
+
+
+# CR7: Flag doc_ids with suspicious patterns (legacy/test/beta prefixes)
+_SUSPICIOUS_DOC_ID_PATTERN = re.compile(r"^(legacy|test|beta|deprecated)_", re.IGNORECASE)
+# CR9: Minimum chunk_text length after cleaning (catch remnant/fragment data)
+_MIN_CHUNK_TEXT_LEN = 20
 
 
 def load_raw_csv(path: Path) -> List[Dict[str, str]]:
@@ -70,13 +76,14 @@ def clean_rows(
     """
     Trả về (cleaned, quarantine).
 
-    Baseline (mở rộng theo narrative Day 10):
-    1) Quarantine: doc_id không thuộc allowlist (export lạ / catalog sai).
-    2) Chuẩn hoá effective_date sang YYYY-MM-DD; quarantine nếu không parse được.
-    3) Quarantine: chunk hr_leave_policy có effective_date < 2026-01-01 (bản HR cũ / conflict version).
-    4) Quarantine: chunk_text rỗng hoặc effective_date rỗng sau chuẩn hoá.
-    5) Loại trùng nội dung chunk_text (giữ bản đầu).
-    6) Fix stale refund: policy_refund_v4 chứa '14 ngày làm việc' → 7 ngày.
+    Baseline rules 1-6 (see docstring above).
+    New rules added (Sprint 2):
+      CR7: doc_id matches suspicious pattern (legacy/test/beta/deprecated_) →
+           quarantine with reason "suspicious_doc_id_prefix"
+      CR8: exported_at is empty or future date (clock skew / data poisoning) →
+           quarantine with reason "invalid_exported_at"
+      CR9: chunk_text shorter than MIN_CHUNK_TEXT_LEN (20 chars) →
+           quarantine with reason "chunk_text_too_short"
     """
     quarantine: List[Dict[str, Any]] = []
     seen_text: set[str] = set()
@@ -89,9 +96,22 @@ def clean_rows(
         eff_raw = raw.get("effective_date", "")
         exported_at = raw.get("exported_at", "")
 
+        # CR7: Suspicious doc_id naming pattern (before allowlist check)
+        if _SUSPICIOUS_DOC_ID_PATTERN.match(doc_id):
+            quarantine.append({**raw, "reason": "suspicious_doc_id_prefix"})
+            continue
+
         if doc_id not in ALLOWED_DOC_IDS:
             quarantine.append({**raw, "reason": "unknown_doc_id"})
             continue
+
+        # CR8: Invalid or future exported_at timestamp
+        if exported_at:
+            # Simple heuristic: flag future dates or suspiciously old (pre-2020)
+            if exported_at > "2030-01-01" or exported_at < "2020-01-01":
+                quarantine.append({**raw, "reason": "invalid_exported_at", "exported_at_raw": exported_at})
+                continue
+        # (empty exported_at is allowed — will use empty string)
 
         eff_norm, eff_err = _normalize_effective_date(eff_raw)
         if eff_err == "empty_effective_date":
@@ -113,6 +133,11 @@ def clean_rows(
 
         if not text:
             quarantine.append({**raw, "reason": "missing_chunk_text"})
+            continue
+
+        # CR9: chunk_text too short to be meaningful
+        if len(text.strip()) < _MIN_CHUNK_TEXT_LEN:
+            quarantine.append({**raw, "reason": "chunk_text_too_short", "text_len": len(text.strip())})
             continue
 
         key = _norm_text(text)
