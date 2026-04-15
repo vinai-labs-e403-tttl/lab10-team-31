@@ -1,5 +1,5 @@
 # Báo Cáo Nhóm — Lab Day 10: Data Pipeline & Data Observability
-
+ 
 **Tên nhóm:** Team 31 (Lab 10 — ETL Pipeline & Data Observability)  
 **Thành viên:**
 | Tên | Vai trò (Day 10) | Role |
@@ -8,6 +8,7 @@
 | Trần Kiên Trường  | Cleaning & Quality Owner | CR rules + Expectations |
 | Đăng Thanh Tùng | Embed & Idempotency Owner | Chroma upsert, chunk_id stable |
 | Đặng Quang Minh | Monitoring / Docs Owner | Freshness check, runbook, group report |
+| Trần Tiến Long | Monitoring / Docs Owner | Freshness check, runbook, group report |
 
 **Ngày nộp:** 2026-04-15  
 **Repo:** https://github.com/vinai-labs-e403-tttl/lab10-team-31  
